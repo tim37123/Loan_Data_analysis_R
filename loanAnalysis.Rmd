@@ -1,0 +1,187 @@
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.width=12, fig.height=8, fig.path='Figs/',
+echo=FALSE, warning=FALSE, message=FALSE)
+```
+
+---
+title: "dataAnalysis"
+output: html_document
+---
+
+#Load Data Analysis Tim Lindsey
+```{r}
+library('ggplot2')
+library('knitr')
+library('plyr')
+loanData <- read.csv('prosperLoanData.csv')
+```
+
+###Overview
+Let's start with a view of the data
+```{r}
+summary(loanData)
+head(loanData)
+```
+
+I'm interested in the overview of statuses of default loans
+```{r}
+ggplot(data=loanData, aes(LoanStatus)) + geom_bar()
+```
+
+I'm unclear what the "chargedoff" parameter is. Looking up the definition it
+appears that this means a loan is severely past due. For that reason I'm going
+to create a new parameter that combines these charges with default to get an
+"unpaid" parameter. I"m also going to merge all of the past due parameters into a single column to clear up the clutter.
+```{r}
+newPlot <- loanData
+newPlot$LoanStatus <- mapvalues(newPlot$LoanStatus, from = c("Chargedoff",
+"Defaulted", "Past Due (1-15 days)", "Past Due (16-30 days)", "Past Due (31-60
+days)", "Past Due (61-90 days)", "Past Due (91-120 days)", "Past Due (>120
+days)"), to = c("SevereDelinquent", "SevereDelinquent", "Past Due", "Past Due",
+"Past Due", "Past Due", "Past Due", "Past Due"))
+
+
+ggplot(data=newPlot, aes(LoanStatus)) + geom_bar() + 
+labs(x="Loan Status Categories",y="Count",title="Loan Status Counts")
+```
+
+This new chart more succintly illustrates the various statuses of loans
+
+I'm also curious how the duration of the loans break down via histogram
+```{r}
+ggplot(loanData, aes(Term)) + geom_bar() + 
+  scale_x_continuous(breaks = c(12, 36, 60))
+```
+
+It looks like there's only 3 types of loans at play here. 12, 36, and 60 
+months.
+
+A couple other quick histograms, I see APR and BorrowerRate
+
+```{r}
+ggplot(loanData, aes(BorrowerAPR)) + geom_bar() + 
+scale_y_continuous(limits = c(0,300)) + scale_x_continuous(limits = c(0,.4))
+
+ggplot(loanData, aes(BorrowerRate)) + geom_bar() + 
+scale_y_continuous(limits = c(0,500)) + scale_x_continuous(limits = c(0,.4))
+```
+
+I suspect that unpaid or defaulted loans are largely tied income. I want to see 
+defaulted loans as income changes. I'm going to use my own table that 
+aggregated the different types of default statuses
+```{r}
+ggplot(data=newPlot, aes(StatedMonthlyIncome, LoanStatus)) + 
+geom_point(aes(alpha=200000))
+```
+
+Not very telling. I want to hone in on the SevereDelinquent parameter so let me change the focus.
+```{r}
+ggplot(data=newPlot, aes(StatedMonthlyIncome, LoanStatus)) + 
+geom_point(aes(alpha=1/1000)) + scale_x_continuous(limits = c(0,500))
+```
+Seems to be a pretty even spread. Perhaps the amount of the payment has 
+an impact
+
+```{r}
+ggplot(data=newPlot, aes(MonthlyLoanPayment, LoanStatus)) + 
+geom_point(alpha = 1/510) + scale_x_continuous(limits = c(0,500))
+```
+Interestingly it appears that there's a heavier concentration at lower
+monthly payments. It is not the expensive payments that lead strongly to 
+delinquency or default.
+
+Chaning direction, I'd like to know if people with higher take home incomes 
+tend to have fewer delinquencies.
+```{r}
+  ggplot(loanData, aes(StatedMonthlyIncome, DelinquenciesLast7Years)) + 
+  geom_point() + scale_x_continuous(limits = c(1,25)) + 
+  scale_y_continuous(limits = c(0,25)) + 
+  geom_smooth(method="lm", se=FALSE) + 
+  labs(title="Delinquencies Compared To Income",
+       x="Monthly Income",y="Number of Delinquencies")
+```
+There are very few instances of delinquencies it seems. I had to manpipulate 
+the value quite a bit. There seems to be (very) slight increase in 
+delinquencies as stated monthly income increases, confirmed via 
+correlation test.
+```{r}
+cor.test(loanData$DelinquenciesLast7Years, loanData$StatedMonthlyIncome) 
+```
+
+I'd like to work with credit score but there's a range. As a simple workaround
+I'm going to take the average of the upper and lower bounds of the range.
+```{r}
+loanData <- transform(loanData, AverageCreditScore = (CreditScoreRangeLower + 
+CreditScoreRangeUpper) / 2)
+```
+
+Let's see the histogram of this data
+```{r}
+ggplot(loanData, aes(AverageCreditScore)) + geom_bar() + 
+scale_x_continuous(limits = c(400,800))
+```
+
+I want to add in the mean (blue) and median (green) credit scores as vertical lines
+```{r}
+ggplot(loanData, aes(AverageCreditScore)) + geom_bar() + 
+scale_x_continuous(limits = c(400,800)) + 
+geom_vline(xintercept = 689.5, color="green", linetype="longdash") +
+geom_vline(xintercept = 695.1, color="blue", linetype="longdash") + 
+labs(title="Average Credit Score",x="Score",y="Count")
+```
+
+I think this average credit score will give me more useful info regarding 
+default probability (this is essentially the same way a loaning agent would
+gauge risk as far as I can tell)
+
+```{r}
+ggplot(loanData, aes(AverageCreditScore, DelinquenciesLast7Years)) + 
+  geom_point(aes(color=IncomeRange), alpha = 1/20) + 
+  geom_smooth(method="lm", se=FALSE) + 
+  labs(title="Credit Score vs Delinquencies (Colored By Income Range)", 
+       x="Credit Score", y="Number of Defaults")
+```
+It's clear here lower incomes have more defaults and as your credit score moves
+up your number of defaults drops. Let's confirm with a linear regression
+```{r}
+fit <- lm(AverageCreditScore ~ DelinquenciesLast7Years + IncomeRange,
+          data=loanData)
+summary(fit)
+```
+In most exmaples linear regression seems to indicate a strong correlation.
+
+###Summary
+Plot 1: Modified Categorical Overview of Loan Statuses
+```{r}
+ggplot(data=newPlot, aes(LoanStatus)) + geom_bar() + 
+labs(x="Loan Status Categories",y="Count",title="Loan Status Counts")
+```
+
+Plot 2: Average Credit Scores of population along with Mean (Blue) and Median 
+(Green) Scores from population
+```{r}
+ggplot(loanData, aes(AverageCreditScore)) + geom_bar() + 
+scale_x_continuous(limits = c(400,800)) + 
+geom_vline(xintercept = 689.5, color="green", linetype="longdash") +
+geom_vline(xintercept = 695.1, color="blue", linetype="longdash") + 
+labs(title="Average Credit Score",x="Score",y="Count")
+```
+
+Plot3: Number of Delinquencies as credit score increases (further segmented
+by Income Range)
+```{r}
+ggplot(loanData, aes(AverageCreditScore, DelinquenciesLast7Years)) + 
+  geom_point(aes(color=IncomeRange), alpha = 1/20) + 
+  geom_smooth(method="lm", se=FALSE) + 
+  labs(title="Credit Score vs Delinquencies (Colored By Income Range)", 
+       x="Credit Score", y="Number of Defaults")
+```
+```{r}
+fit <- lm(AverageCreditScore ~ DelinquenciesLast7Years + IncomeRange,
+          data=loanData)
+summary(fit)
+```
+
+
+###Reflection
+This was an interesting dataset to work with. I was surprised to find  a lack of correlation when it came to a lot of the data, particularly how little of an impact things like income had on default rate. It would be interesting to see additional data in this set such as metadata outlining if the individuals had ever been audited by the IRS, which might prove a positive indicator of potential to default. One of the things I like most about this data is the opportunity to use credit scores as indicators as this is a pretty common use case in the real world.
